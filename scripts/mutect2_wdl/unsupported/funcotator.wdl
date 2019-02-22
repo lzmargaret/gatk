@@ -3,14 +3,15 @@
 # Description of inputs:
 #
 #   Required:
-#     gatk_docker                    -  GATK Docker image in which to run
-#     ref_fasta                      -  Reference FASTA file.
-#     ref_fasta_index                -  Reference FASTA file index.
-#     ref_fasta_dict                 -  Reference FASTA file sequence dictionary.
-#     variant_vcf_to_funcotate       -  Variant Context File (VCF) containing the variants to annotate.
-#     reference_version              -  Version of the reference being used.  Either `hg19` or `hg38`.
-#     output_file_name               -  Path to desired output file.
-#			compress										   -  Whether to compress the resulting output file.
+#     String gatk_docker             -  GATK Docker image in which to run
+#     File ref_fasta                 -  Reference FASTA file.
+#     File ref_fasta_index           -  Reference FASTA file index.
+#     File ref_fasta_dict            -  Reference FASTA file sequence dictionary.
+#     File variant_vcf_to_funcotate  -  Variant Context File (VCF) containing the variants to annotate.
+#     String reference_version       -  Version of the reference being used.  Either `hg19` or `hg38`.
+#     String output_file_name        -  Path to desired output file.
+#     String output_format           -  Output file format (either VCF or MAF).
+#     Boolean compress				 -  Whether to compress the resulting output file.
 #     Boolean use_gnomad             -  If true, will enable the gnomAD data sources in the data source tar.gz, if they exist.
 #
 #   Optional:
@@ -37,8 +38,9 @@ workflow Funcotator {
     File variant_vcf_to_funcotate
     String reference_version
     String output_file_base_name
-		Boolean compress
-		Boolean use_gnomad
+    String output_format
+    Boolean compress
+    Boolean use_gnomad
 
     File? interval_list
     File? data_sources_tar_gz
@@ -52,23 +54,25 @@ workflow Funcotator {
 
     call Funcotate {
         input:
+            gatk_docker               = gatk_docker,
             ref_fasta                 = ref_fasta,
             ref_fasta_index           = ref_fasta_index,
             ref_dict                  = ref_dict,
             input_vcf                 = variant_vcf_to_funcotate,
             reference_version         = reference_version,
-            interval_list             = interval_list,
             output_file_base_name     = output_file_base_name,
-						compress                  = compress,
-            output_format             = "VCF",
+            output_format             = output_format,
+            compress                  = compress,
+            use_gnomad                = use_gnomad,
+
+            interval_list             = interval_list,
             data_sources_tar_gz       = data_sources_tar_gz,
             transcript_selection_mode = transcript_selection_mode,
             transcript_selection_list = transcript_selection_list,
             annotation_defaults       = annotation_defaults,
             annotation_overrides      = annotation_overrides,
             gatk_override             = gatk4_jar_override,
-            gatk_docker               = gatk_docker,
-						use_gnomad                = use_gnomad,
+
             extra_args                = funcotator_extra_args
     }
 
@@ -80,7 +84,9 @@ workflow Funcotator {
 
 
 task Funcotate {
-     # inputs
+
+     # ==============
+     # Inputs
      File ref_fasta
      File ref_fasta_index
      File ref_dict
@@ -89,10 +95,10 @@ task Funcotate {
      String output_file_base_name
      String output_format
      Boolean compress
+     Boolean use_gnomad
      String output_vcf = output_file_base_name + if compress then ".vcf.gz" else ".vcf"
      String output_vcf_index = output_vcf +  if compress then ".tbi" else ".idx"
 
-		 Boolean use_gnomad
      File? data_sources_tar_gz
      String? transcript_selection_mode
      Array[String]? transcript_selection_list
@@ -111,10 +117,9 @@ task Funcotate {
      String filter_funcotations_args = if defined(filter_funcotations) && (filter_funcotations) then " --remove-filtered-variants " else ""
      String interval_list_arg = if defined(interval_list) then " -L " else ""
      String extra_args_arg = select_first([extra_args, ""])
+
      # ==============
-
-     # runtime
-
+     # Runtime options:
      String gatk_docker
      File? gatk_override
      Int? mem
@@ -137,12 +142,13 @@ task Funcotate {
      Int machine_mem = if defined(mem) then mem *1000 else default_ram_mb
      Int command_mem = machine_mem - 1000
 
-		 String dollar = "$"
+     String dollar = "$"
 
      command <<<
          set -e
          export GATK_LOCAL_JAR=${default="/root/gatk.jar" gatk_override}
 
+         # Handle our data sources:
          DATA_SOURCES_TAR_GZ=${data_sources_tar_gz}
          if [[ ! -e $DATA_SOURCES_TAR_GZ ]] ; then
              # We have to download the data sources:
@@ -158,19 +164,21 @@ task Funcotate {
              DATA_SOURCES_FOLDER="$PWD/datasources_dir"
          fi
 
-				 if ${use_gnomad} ; then
-						for potential_gnomad_gz in gnomAD_exome.tar.gz gnomAD_genome.tar.gz ; do
-				         if [[ -f ${dollar}{DATA_SOURCES_FOLDER}/${dollar}{potential_gnomad_gz} ]] ; then
-						         cd ${dollar}{DATA_SOURCES_FOLDER}
-				 		         tar -zvxf ${dollar}{potential_gnomad_gz}
-										 cd -
-								 else 
-									 echo "ERROR: Cannot find gnomAD folder: ${dollar}{potential_gnomad_gz}" 1>&2
-									 false 
-						     fi
-					  done
-				 fi
+         # Handle gnomAD:
+         if ${use_gnomad} ; then
+             for potential_gnomad_gz in gnomAD_exome.tar.gz gnomAD_genome.tar.gz ; do
+                 if [[ -f ${dollar}{DATA_SOURCES_FOLDER}/${dollar}{potential_gnomad_gz} ]] ; then
+                     cd ${dollar}{DATA_SOURCES_FOLDER}
+                     tar -zvxf ${dollar}{potential_gnomad_gz}
+                     cd -
+                 else
+                     echo "ERROR: Cannot find gnomAD folder: ${dollar}{potential_gnomad_gz}" 1>&2
+                     false
+                 fi
+             done
+         fi
 
+         # Run Funcotator:
          gatk --java-options "-Xmx${command_mem}m" Funcotator \
              --data-sources-path $DATA_SOURCES_FOLDER \
              --ref-version ${reference_version} \
