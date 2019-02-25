@@ -61,7 +61,7 @@ workflow Funcotator {
             ref_fasta_index           = ref_fasta_index,
             ref_dict                  = ref_dict,
             input_vcf                 = variant_vcf_to_funcotate,
-            input_vcf_index           = variant_vcf_to_funcotate_index,
+            input_vcf_idx             = variant_vcf_to_funcotate_index,
             reference_version         = reference_version,
             output_file_base_name     = output_file_base_name,
             output_format             = output_format,
@@ -80,11 +80,12 @@ workflow Funcotator {
     }
 
     output {
-        File funcotated_file_out = Funcotate.funcotated_file
-        File funcotated_file_out_idx = Funcotate.funcotated_file_index
+        File funcotated_file_out = Funcotate.funcotated_output_file
+        File funcotated_file_out_idx = Funcotate.funcotated_output_file_index
     }
 }
 
+################################################################################
 
 task Funcotate {
 
@@ -94,7 +95,7 @@ task Funcotate {
      File ref_fasta_index
      File ref_dict
      File input_vcf
-     File input_vcf_index
+     File input_vcf_idx
      String reference_version
      String output_file_base_name
      String output_format
@@ -102,10 +103,16 @@ task Funcotate {
      Boolean use_gnomad
 
      File? data_sources_tar_gz
+
+     String? control_id
+     String? case_id
+     String? sequencing_center
+     String? sequence_source
      String? transcript_selection_mode
-     Array[String]? transcript_selection_list
+     File? transcript_selection_list
      Array[String]? annotation_defaults
      Array[String]? annotation_overrides
+     Array[String]? funcotator_excluded_fields
      Boolean? filter_funcotations
      File? interval_list
 
@@ -127,15 +134,20 @@ task Funcotate {
      String annotation_def_arg = if defined(annotation_defaults) then " --annotation-default " else ""
      String annotation_over_arg = if defined(annotation_overrides) then " --annotation-override " else ""
      String filter_funcotations_args = if defined(filter_funcotations) && (filter_funcotations) then " --remove-filtered-variants " else ""
+     String excluded_fields_args = if defined(funcotator_excluded_fields) then " --exclude-field " else ""
+
      String interval_list_arg = if defined(interval_list) then " -L " else ""
+
      String extra_args_arg = select_first([extra_args, ""])
 
      # ==============
      # Runtime options:
      String gatk_docker
+
      File? gatk_override
      Int? mem
      Int? preemptible_attempts
+     Int? max_retries
      Int? disk_space_gb
      Int? cpu
 
@@ -143,6 +155,7 @@ task Funcotate {
 
      # This should be updated when a new version of the data sources is released
      # TODO: Make this dynamically chosen in the command.
+     # TODO: Make this pull from google cloud, rather than from the FTP:
      String default_datasources_version = "funcotator_dataSources.v1.6.20190124s"
 
      # You may have to change the following two parameter values depending on the task requirements
@@ -201,14 +214,19 @@ task Funcotate {
              -V ${input_vcf} \
              -O ${output_file} \
              ${interval_list_arg} ${default="" interval_list} \
+             --annotation-default normal_barcode:${default="Unknown" control_id} \
+             --annotation-default tumor_barcode:${default="Unknown" case_id} \
+             --annotation-default Center:${default="Unknown" sequencing_center} \
+             --annotation-default source:${default="Unknown" sequence_source} \
              ${"--transcript-selection-mode " + transcript_selection_mode} \
              ${transcript_selection_arg}${default="" sep=" --transcript-list " transcript_selection_list} \
              ${annotation_def_arg}${default="" sep=" --annotation-default " annotation_defaults} \
              ${annotation_over_arg}${default="" sep=" --annotation-override " annotation_overrides} \
+             ${excluded_fields_args}${default="" sep=" --exclude-field " funcotator_excluded_fields} \
              ${filter_funcotations_args} \
              ${extra_args_arg}
 
-         # Make sure we have a proper index for MAF files so this workflow doesn't fail:
+         # Make sure we have a placeholder index for MAF files so this workflow doesn't fail:
          if [[ "${output_format}" == "MAF" ]] ; then
             touch ${output_maf_index}
          fi
@@ -216,14 +234,16 @@ task Funcotate {
 
      runtime {
          docker: gatk_docker
+         bootDiskSizeGb: 20
          memory: machine_mem + " MB"
          disks: "local-disk " + select_first([disk_space_gb, default_disk_space_gb]) + if use_ssd then " SSD" else " HDD"
          preemptible: select_first([preemptible_attempts, 3])
+         maxRetries: select_first([max_retries, 3])
          cpu: select_first([cpu, 1])
      }
 
      output {
-         File funcotated_file = "${output_file}"
-         File funcotated_file_index = "${output_file_index}"
+         File funcotated_output_file = "${output_file}"
+         File funcotated_output_file_index = "${output_file_index}"
      }
  }

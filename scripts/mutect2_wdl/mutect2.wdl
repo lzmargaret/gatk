@@ -123,7 +123,9 @@ workflow Mutect2 {
     Boolean? run_funcotator
     Boolean run_funcotator_or_default = select_first([run_funcotator, false])
     String? funco_reference_version
+    File funco_default_data_sources = "gs://broad-public-datasets/funcotator/funcotator_dataSources.v1.6.20190124s.tar.gz"
     File? funco_data_sources_tar_gz
+    File? final_funco_data_sources_tar_gz = if defined(funco_data_sources_tar_gz) then funco_data_sources_tar_gz else funco_default_data_sources
     String? funco_transcript_selection_mode
     File? funco_transcript_selection_list
     Array[String]? funco_annotation_defaults
@@ -413,30 +415,39 @@ workflow Mutect2 {
     if (run_funcotator_or_default) {
         File funcotate_vcf_input = select_first([FilterAlignmentArtifacts.filtered_vcf, FilterByOrientationBias.filtered_vcf, Filter.filtered_vcf])
         File funcotate_vcf_input_index = select_first([FilterAlignmentArtifacts.filtered_vcf_index, FilterByOrientationBias.filtered_vcf_index, Filter.filtered_vcf_index])
-        call FuncotateMaf {
+        call Funcotate {
             input:
-                input_vcf = funcotate_vcf_input,
-                input_vcf_idx = funcotate_vcf_input_index,
                 ref_fasta = ref_fasta,
                 ref_fasta_index = ref_fai,
                 ref_dict = ref_dict,
+                input_vcf = funcotate_vcf_input,
+                input_vcf_idx = funcotate_vcf_input_index,
                 reference_version = select_first([funco_reference_version, "hg19"]),
-                data_sources_tar_gz = funco_data_sources_tar_gz,
-                case_id = M2.tumor_sample[0],
+                output_file_base_name = basename(funcotate_vcf_input, ".vcf") + ".annotated",
+                output_format = "MAF",
+                compress = false,
+                use_gnomad = false,
+
+                data_sources_tar_gz = final_funco_data_sources_tar_gz,
+
                 control_id = M2.normal_sample[0],
+                case_id = M2.tumor_sample[0],
+                sequencing_center = sequencing_center,
+                sequence_source = sequence_source,
                 transcript_selection_mode = funco_transcript_selection_mode,
                 transcript_selection_list = funco_transcript_selection_list,
                 annotation_defaults = funco_annotation_defaults,
                 annotation_overrides = funco_annotation_overrides,
-                gatk_docker = gatk_docker,
-                gatk_override = gatk_override,
-                filter_funcotations = filter_funcotations_or_default,
                 funcotator_excluded_fields = funcotator_excluded_fields,
-                sequencing_center = sequencing_center,
-                sequence_source = sequence_source,
+                filter_funcotations = filter_funcotations_or_default,
+
+                extra_args = funcotator_extra_args,
+
+                gatk_docker = gatk_docker,
+
+                gatk_override = gatk_override,
                 disk_space_gb = ceil(size(funcotate_vcf_input, "GB") * large_input_to_output_multiplier) + onco_tar_size + disk_pad,
-                max_retries = max_retries,
-                extra_args = funcotator_extra_args
+                max_retries = max_retries
         }
     }
 
@@ -445,7 +456,8 @@ workflow Mutect2 {
         File filtered_vcf_index = select_first([FilterAlignmentArtifacts.filtered_vcf_index, FilterByOrientationBias.filtered_vcf_index, Filter.filtered_vcf_index])
         File? contamination_table = CalculateContamination.contamination_table
         File? oncotated_m2_maf = oncotate_m2.oncotated_m2_maf
-        File? funcotated_maf = FuncotateMaf.funcotated_output
+        File? funcotated_file = Funcotate.funcotated_output_file
+        File? funcotated_file_index = Funcotate.funcotated_output_file_index
         File? preadapter_detail_metrics = CollectSequencingArtifactMetrics.pre_adapter_metrics
         File? bamout = MergeBamOuts.merged_bam_out
         File? bamout_index = MergeBamOuts.merged_bam_out_index
@@ -1177,47 +1189,180 @@ task SumFloats {
         docker: "python:2.7"
         disks: "local-disk " + 10 + " HDD"
         preemptible: select_first([preemptible_attempts, 10])
-        maxRetries: select_first([max_retries, 3])
+        maxRetries: FuncotateMafselect_first([max_retries, 3])
     }
 }
 
-task FuncotateMaf {
-     # inputs
+#task FuncotateMaf {
+#     # inputs
+#     File ref_fasta
+#     File ref_fasta_index
+#     File ref_dict
+#     File input_vcf
+#     File input_vcf_idx
+#     String reference_version
+#     String output_format = "MAF"
+#     String? sequencing_center
+#     String? sequence_source
+#     String case_id
+#     String? control_id
+#
+#     File? data_sources_tar_gz
+#     String? transcript_selection_mode
+#     File? transcript_selection_list
+#     Array[String]? annotation_defaults
+#     Array[String]? annotation_overrides
+#     Array[String]? funcotator_excluded_fields
+#     Boolean filter_funcotations
+#     File? interval_list
+#
+#     String? extra_args
+#
+#     # ==============
+#     # Process input args:
+#     String annotation_def_arg = if defined(annotation_defaults) then " --annotation-default " else ""
+#     String annotation_over_arg = if defined(annotation_overrides) then " --annotation-override " else ""
+#     String filter_funcotations_args = if (filter_funcotations) then " --remove-filtered-variants " else ""
+#     String excluded_fields_args = if defined(funcotator_excluded_fields) then " --exclude-field " else ""
+#     String final_output_filename = basename(input_vcf, ".vcf") + ".maf.annotated"
+#     # ==============
+#
+#     # runtime
+#
+#     String gatk_docker
+#     File? gatk_override
+#     Int? mem
+#     Int? preemptible_attempts
+#     Int? max_retries
+#     Int? disk_space_gb
+#     Int? cpu
+#
+#     Boolean use_ssd = false
+#
+#     # This should be updated when a new version of the data sources is released
+#     String default_datasources_version = "funcotator_dataSources.v1.4.20180615"
+#
+#     # You may have to change the following two parameter values depending on the task requirements
+#     Int default_ram_mb = 3000
+#     # WARNING: In the workflow, you should calculate the disk space as an input to this task (disk_space_gb).
+#     Int default_disk_space_gb = 100
+#
+#     # Mem is in units of GB but our command and memory runtime values are in MB
+#     Int machine_mem = if defined(mem) then mem *1000 else default_ram_mb
+#     Int command_mem = machine_mem - 1000
+#
+#     command <<<
+#         set -e
+#         export GATK_LOCAL_JAR=${default="/root/gatk.jar" gatk_override}
+#
+#         DATA_SOURCES_TAR_GZ=${data_sources_tar_gz}
+#         if [[ ! -e $DATA_SOURCES_TAR_GZ ]] ; then
+#             # We have to download the data sources:
+#             echo "Data sources gzip does not exist: $DATA_SOURCES_TAR_GZ"
+#             echo "Downloading default data sources..."
+#             wget ftp://gsapubftp-anonymous@ftp.broadinstitute.org/bundle/funcotator/${default_datasources_version}.tar.gz
+#             tar -zxf ${default_datasources_version}.tar.gz
+#             DATA_SOURCES_FOLDER=${default_datasources_version}
+#         else
+#             # Extract the tar.gz:
+#             mkdir datasources_dir
+#             tar zxvf ${data_sources_tar_gz} -C datasources_dir --strip-components 1
+#             DATA_SOURCES_FOLDER="$PWD/datasources_dir"
+#         fi
+#
+#         gatk --java-options "-Xmx${command_mem}m" Funcotator \
+#             --data-sources-path $DATA_SOURCES_FOLDER \
+#             --ref-version ${reference_version} \
+#             --output-file-format ${output_format} \
+#             -R ${ref_fasta} \
+#             -V ${input_vcf} \
+#             -O ${final_output_filename} \
+#             ${"-L " + interval_list} \
+#             ${"--transcript-selection-mode " + transcript_selection_mode} \
+#             ${"--transcript-list " + transcript_selection_list} \
+#            --annotation-default normal_barcode:${control_id} \
+#            --annotation-default tumor_barcode:${case_id} \
+#            --annotation-default Center:${default="Unknown" sequencing_center} \
+#            --annotation-default source:${default="Unknown" sequence_source} \
+#             ${annotation_def_arg}${default="" sep=" --annotation-default " annotation_defaults} \
+#             ${annotation_over_arg}${default="" sep=" --annotation-override " annotation_overrides} \
+#             ${excluded_fields_args}${default="" sep=" --exclude-field " funcotator_excluded_fields} \
+#             ${filter_funcotations_args} \
+#             ${extra_args}
+#     >>>
+#
+#     runtime {
+#         docker: gatk_docker
+#         bootDiskSizeGb: 20
+#         memory: machine_mem + " MB"
+#         disks: "local-disk " + select_first([disk_space_gb, default_disk_space_gb]) + if use_ssd then " SSD" else " HDD"
+#         preemptible: select_first([preemptible_attempts, 3])
+#         maxRetries: select_first([max_retries, 3])
+#         cpu: select_first([cpu, 1])
+#     }
+#
+#     output {
+#         File funcotated_output = "${final_output_filename}"
+#     }
+# }
+
+task Funcotate {
+
+     # ==============
+     # Inputs
      File ref_fasta
      File ref_fasta_index
      File ref_dict
      File input_vcf
      File input_vcf_idx
      String reference_version
-     String output_format = "MAF"
-     String? sequencing_center
-     String? sequence_source
-     String case_id
-     String? control_id
+     String output_file_base_name
+     String output_format
+     Boolean compress
+     Boolean use_gnomad
 
      File? data_sources_tar_gz
+
+     String? control_id
+     String? case_id
+     String? sequencing_center
+     String? sequence_source
      String? transcript_selection_mode
      File? transcript_selection_list
      Array[String]? annotation_defaults
      Array[String]? annotation_overrides
      Array[String]? funcotator_excluded_fields
-     Boolean filter_funcotations
+     Boolean? filter_funcotations
      File? interval_list
 
      String? extra_args
 
      # ==============
      # Process input args:
+
+     String output_maf = output_file_base_name + ".maf"
+     String output_maf_index = output_maf + ".idx"
+
+     String output_vcf = output_file_base_name + if compress then ".vcf.gz" else ".vcf"
+     String output_vcf_index = output_vcf +  if compress then ".tbi" else ".idx"
+
+     String output_file = if output_format == "MAF" then output_maf else output_vcf
+     String output_file_index = if output_format == "MAF" then output_maf_index else output_vcf_index
+
+     String transcript_selection_arg = if defined(transcript_selection_list) then " --transcript-list " else ""
      String annotation_def_arg = if defined(annotation_defaults) then " --annotation-default " else ""
      String annotation_over_arg = if defined(annotation_overrides) then " --annotation-override " else ""
-     String filter_funcotations_args = if (filter_funcotations) then " --remove-filtered-variants " else ""
+     String filter_funcotations_args = if defined(filter_funcotations) && (filter_funcotations) then " --remove-filtered-variants " else ""
      String excluded_fields_args = if defined(funcotator_excluded_fields) then " --exclude-field " else ""
-     String final_output_filename = basename(input_vcf, ".vcf") + ".maf.annotated"
+
+     String interval_list_arg = if defined(interval_list) then " -L " else ""
+
+     String extra_args_arg = select_first([extra_args, ""])
+
      # ==============
-
-     # runtime
-
+     # Runtime options:
      String gatk_docker
+
      File? gatk_override
      Int? mem
      Int? preemptible_attempts
@@ -1228,21 +1373,26 @@ task FuncotateMaf {
      Boolean use_ssd = false
 
      # This should be updated when a new version of the data sources is released
-     String default_datasources_version = "funcotator_dataSources.v1.4.20180615"
+     # TODO: Make this dynamically chosen in the command.
+     # TODO: Make this pull from google cloud, rather than from the FTP:
+     String default_datasources_version = "funcotator_dataSources.v1.6.20190124s"
 
      # You may have to change the following two parameter values depending on the task requirements
      Int default_ram_mb = 3000
-     # WARNING: In the workflow, you should calculate the disk space as an input to this task (disk_space_gb).
+     # WARNING: In the workflow, you should calculate the disk space as an input to this task (disk_space_gb).  Please see [TODO: Link from Jose] for examples.
      Int default_disk_space_gb = 100
 
      # Mem is in units of GB but our command and memory runtime values are in MB
      Int machine_mem = if defined(mem) then mem *1000 else default_ram_mb
      Int command_mem = machine_mem - 1000
 
+     String dollar = "$"
+
      command <<<
          set -e
          export GATK_LOCAL_JAR=${default="/root/gatk.jar" gatk_override}
 
+         # Handle our data sources:
          DATA_SOURCES_TAR_GZ=${data_sources_tar_gz}
          if [[ ! -e $DATA_SOURCES_TAR_GZ ]] ; then
              # We have to download the data sources:
@@ -1253,30 +1403,52 @@ task FuncotateMaf {
              DATA_SOURCES_FOLDER=${default_datasources_version}
          else
              # Extract the tar.gz:
+             echo "Extracting data sources zip file..."
              mkdir datasources_dir
              tar zxvf ${data_sources_tar_gz} -C datasources_dir --strip-components 1
              DATA_SOURCES_FOLDER="$PWD/datasources_dir"
          fi
 
+         # Handle gnomAD:
+         if ${use_gnomad} ; then
+             echo "Enabling gnomAD..."
+             for potential_gnomad_gz in gnomAD_exome.tar.gz gnomAD_genome.tar.gz ; do
+                 if [[ -f ${dollar}{DATA_SOURCES_FOLDER}/${dollar}{potential_gnomad_gz} ]] ; then
+                     cd ${dollar}{DATA_SOURCES_FOLDER}
+                     tar -zvxf ${dollar}{potential_gnomad_gz}
+                     cd -
+                 else
+                     echo "ERROR: Cannot find gnomAD folder: ${dollar}{potential_gnomad_gz}" 1>&2
+                     false
+                 fi
+             done
+         fi
+
+         # Run Funcotator:
          gatk --java-options "-Xmx${command_mem}m" Funcotator \
              --data-sources-path $DATA_SOURCES_FOLDER \
              --ref-version ${reference_version} \
              --output-file-format ${output_format} \
              -R ${ref_fasta} \
              -V ${input_vcf} \
-             -O ${final_output_filename} \
-             ${"-L " + interval_list} \
+             -O ${output_file} \
+             ${interval_list_arg} ${default="" interval_list} \
+             --annotation-default normal_barcode:${default="Unknown" control_id} \
+             --annotation-default tumor_barcode:${default="Unknown" case_id} \
+             --annotation-default Center:${default="Unknown" sequencing_center} \
+             --annotation-default source:${default="Unknown" sequence_source} \
              ${"--transcript-selection-mode " + transcript_selection_mode} \
-             ${"--transcript-list " + transcript_selection_list} \
-            --annotation-default normal_barcode:${control_id} \
-            --annotation-default tumor_barcode:${case_id} \
-            --annotation-default Center:${default="Unknown" sequencing_center} \
-            --annotation-default source:${default="Unknown" sequence_source} \
+             ${transcript_selection_arg}${default="" sep=" --transcript-list " transcript_selection_list} \
              ${annotation_def_arg}${default="" sep=" --annotation-default " annotation_defaults} \
              ${annotation_over_arg}${default="" sep=" --annotation-override " annotation_overrides} \
              ${excluded_fields_args}${default="" sep=" --exclude-field " funcotator_excluded_fields} \
              ${filter_funcotations_args} \
-             ${extra_args}
+             ${extra_args_arg}
+
+         # Make sure we have a placeholder index for MAF files so this workflow doesn't fail:
+         if [[ "${output_format}" == "MAF" ]] ; then
+            touch ${output_maf_index}
+         fi
      >>>
 
      runtime {
@@ -1290,6 +1462,7 @@ task FuncotateMaf {
      }
 
      output {
-         File funcotated_output = "${final_output_filename}"
+         File funcotated_output_file = "${output_file}"
+         File funcotated_output_file_index = "${output_file_index}"
      }
  }
