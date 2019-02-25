@@ -48,9 +48,9 @@ workflow Funcotator {
     Array[String]? transcript_selection_list
     Array[String]? annotation_defaults
     Array[String]? annotation_overrides
-    File? gatk4_jar_override
-
     String? funcotator_extra_args
+
+    File? gatk4_jar_override
 
     call Funcotate {
         input:
@@ -71,14 +71,14 @@ workflow Funcotator {
             transcript_selection_list = transcript_selection_list,
             annotation_defaults       = annotation_defaults,
             annotation_overrides      = annotation_overrides,
-            gatk_override             = gatk4_jar_override,
+            extra_args                = funcotator_extra_args,
 
-            extra_args                = funcotator_extra_args
+            gatk_override             = gatk4_jar_override
     }
 
     output {
-        File funcotated_vcf_out = Funcotate.funcotated_vcf
-        File funcotated_vcf_out_idx = Funcotate.funcotated_vcf_index
+        File funcotated_file_out = Funcotate.funcotated_file
+        File funcotated_file_out_idx = Funcotate.funcotated_file_index
     }
 }
 
@@ -96,8 +96,6 @@ task Funcotate {
      String output_format
      Boolean compress
      Boolean use_gnomad
-     String output_vcf = output_file_base_name + if compress then ".vcf.gz" else ".vcf"
-     String output_vcf_index = output_vcf +  if compress then ".tbi" else ".idx"
 
      File? data_sources_tar_gz
      String? transcript_selection_mode
@@ -111,6 +109,16 @@ task Funcotate {
 
      # ==============
      # Process input args:
+
+     String output_maf = output_file_base_name + ".maf"
+     String output_maf_index = output_maf + ".idx"
+
+     String output_vcf = output_file_base_name + if compress then ".vcf.gz" else ".vcf"
+     String output_vcf_index = output_vcf +  if compress then ".tbi" else ".idx"
+
+     String output_file = if output_format == "MAF" then output_maf else output_vcf
+     String output_file_index = if output_format == "MAF" then output_maf_index else output_vcf_index
+
      String transcript_selection_arg = if defined(transcript_selection_list) then " --transcript-list " else ""
      String annotation_def_arg = if defined(annotation_defaults) then " --annotation-default " else ""
      String annotation_over_arg = if defined(annotation_overrides) then " --annotation-override " else ""
@@ -159,6 +167,7 @@ task Funcotate {
              DATA_SOURCES_FOLDER=${default_datasources_version}
          else
              # Extract the tar.gz:
+             echo "Extracting data sources zip file..."
              mkdir datasources_dir
              tar zxvf ${data_sources_tar_gz} -C datasources_dir --strip-components 1
              DATA_SOURCES_FOLDER="$PWD/datasources_dir"
@@ -166,6 +175,7 @@ task Funcotate {
 
          # Handle gnomAD:
          if ${use_gnomad} ; then
+             echo "Enabling gnomAD..."
              for potential_gnomad_gz in gnomAD_exome.tar.gz gnomAD_genome.tar.gz ; do
                  if [[ -f ${dollar}{DATA_SOURCES_FOLDER}/${dollar}{potential_gnomad_gz} ]] ; then
                      cd ${dollar}{DATA_SOURCES_FOLDER}
@@ -185,7 +195,7 @@ task Funcotate {
              --output-file-format ${output_format} \
              -R ${ref_fasta} \
              -V ${input_vcf} \
-             -O ${output_vcf} \
+             -O ${output_file} \
              ${interval_list_arg} ${default="" interval_list} \
              ${"--transcript-selection-mode " + transcript_selection_mode} \
              ${transcript_selection_arg}${default="" sep=" --transcript-list " transcript_selection_list} \
@@ -193,6 +203,11 @@ task Funcotate {
              ${annotation_over_arg}${default="" sep=" --annotation-override " annotation_overrides} \
              ${filter_funcotations_args} \
              ${extra_args_arg}
+
+         # Make sure we have a proper index for MAF files so this workflow doesn't fail:
+         if [[ "${output_format}" == "MAF" ]] ; then
+            touch ${output_maf_index}
+         fi
      >>>
 
      runtime {
@@ -204,7 +219,7 @@ task Funcotate {
      }
 
      output {
-         File funcotated_vcf = "${output_vcf}"
-         File funcotated_vcf_index = "${output_vcf_index}"
+         File funcotated_file = "${output_file}"
+         File funcotated_file_index = "${output_file_index}"
      }
  }
