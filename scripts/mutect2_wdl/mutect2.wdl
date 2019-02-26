@@ -52,12 +52,17 @@
 ##
 ## Funcotator parameters (see Funcotator help for more details).
 ## funco_reference_version: "hg19" for hg19 or b37.  "hg38" for hg38.  Default: "hg19"
-## funco_transcript_selection_list: Transcripts (one GENCODE ID per line) to give priority during selection process.
-## funco_transcript_selection_mode: How to select transcripts in Funcotator.  ALL, CANONICAL, or BEST_EFFECT
+## funco_output_format: "MAF" to produce a MAF file, "VCF" to procude a VCF file.  Default: "MAF"
+## funco_compress: (Only valid if funco_output_format == "VCF" )  If true, will compress the output of Funcotator.  If false, produces an uncompressed output file.  Default: false
+## funco_use_gnomad_AF: If true, wil include gnomAD allele frequency annotations in output by connecting to the internet to query gnomAD (this impacts performance).  If false, will not annotate with gnomAD.  Default: false
 ## funco_data_sources_tar_gz:  Funcotator datasources tar gz file.  Bucket location is recommended when running on the cloud.
+## funco_transcript_selection_mode: How to select transcripts in Funcotator.  ALL, CANONICAL, or BEST_EFFECT
+## funco_transcript_selection_list: Transcripts (one GENCODE ID per line) to give priority during selection process.
 ## funco_annotation_defaults:  Default values for annotations, when values are unspecified.  Specified as  <ANNOTATION>:<VALUE>.  For example:  "Center:Broad"
 ## funco_annotation_overrides:  Values for annotations, even when values are unspecified.  Specified as  <ANNOTATION>:<VALUE>.  For example:  "Center:Broad"
 ## funcotator_excluded_fields:  Annotations that should not appear in the output (VCF or MAF).  Specified as  <ANNOTATION>.  For example:  "ClinVar_ALLELEID"
+## funco_filter_funcotations: If true, will only annotate variants that have passed filtering (. or PASS value in the FILTER column).  If false, will annotate all variants in the input file.  Default: true
+## funcotator_extra_args: Any additional arguments to pass to Funcotator.  Default: ""
 ##
 ## Outputs :
 ## - One VCF file and its index with primary filtering applied; secondary filtering and functional annotation if requested; a bamout.bam
@@ -119,24 +124,30 @@ workflow Mutect2 {
     File? default_config_file
     String? oncotator_extra_args
 
-    # funcotator inputs
+    # Funcotator inputs
     Boolean? run_funcotator
-    Boolean run_funcotator_or_default = select_first([run_funcotator, false])
+
     String? funco_reference_version
-    File funco_default_data_sources = "gs://broad-public-datasets/funcotator/funcotator_dataSources.v1.6.20190124s.tar.gz"
+    String? funco_output_format
+    Boolean? funco_compress
+    Boolean? funco_use_gnomad_AF
     File? funco_data_sources_tar_gz
-    File? final_funco_data_sources_tar_gz = if defined(funco_data_sources_tar_gz) then funco_data_sources_tar_gz else funco_default_data_sources
     String? funco_transcript_selection_mode
     File? funco_transcript_selection_list
     Array[String]? funco_annotation_defaults
     Array[String]? funco_annotation_overrides
     Array[String]? funcotator_excluded_fields
+    Boolean? funco_filter_funcotations
     String? funcotator_extra_args
 
-    File? gatk_override
+    Boolean run_funcotator_or_default = select_first([run_funcotator, false])
+    File funco_default_data_sources = "gs://broad-public-datasets/funcotator/funcotator_dataSources.v1.6.20190124s.tar.gz"
+    File? final_funco_data_sources_tar_gz = if defined(funco_data_sources_tar_gz) then funco_data_sources_tar_gz else funco_default_data_sources
+    String funco_default_output_format = "MAF"
 
     # runtime
     String gatk_docker
+    File? gatk_override
     String basic_bash_docker = "ubuntu:16.04"
     String? oncotator_docker
     String oncotator_docker_or_default = select_first([oncotator_docker, "broadinstitute/oncotator:1.9.9.0"])
@@ -424,9 +435,9 @@ workflow Mutect2 {
                 input_vcf_idx = funcotate_vcf_input_index,
                 reference_version = select_first([funco_reference_version, "hg19"]),
                 output_file_base_name = basename(funcotate_vcf_input, ".vcf") + ".annotated",
-                output_format = "MAF",
-                compress = false,
-                use_gnomad = false,
+                output_format = if defined(funco_output_format) then "" + funco_output_format else funco_default_output_format,
+                compress = if defined(funco_compress) then funco_compress else false,
+                use_gnomad = if defined(funco_use_gnomad_AF) then funco_use_gnomad_AF else false,
 
                 data_sources_tar_gz = final_funco_data_sources_tar_gz,
 
