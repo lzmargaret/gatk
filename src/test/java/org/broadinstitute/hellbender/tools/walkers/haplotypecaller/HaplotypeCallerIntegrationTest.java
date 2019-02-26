@@ -14,7 +14,7 @@ import org.apache.commons.lang3.tuple.Pair;
 import org.broadinstitute.barclay.argparser.CommandLineException;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
-import org.broadinstitute.hellbender.engine.AssemblyRegionWalker;
+import org.broadinstitute.hellbender.cmdline.argumentcollections.IntervalArgumentCollection;
 import org.broadinstitute.hellbender.engine.FeatureDataSource;
 import org.broadinstitute.hellbender.engine.ReadsDataSource;
 import org.broadinstitute.hellbender.exceptions.UserException;
@@ -1014,6 +1014,28 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
         for ( final VariantContext vc : vcfRecords ) {
             Assert.assertTrue(isGVCFReferenceBlock(vc), "Expected only GVCF reference blocks (no actual calls)");
         }
+    }
+
+    // check that a single, errorful, read that induces a cycle does not cause an assembly region to lose a real variant
+    @Test
+    public void testPrunedCycle() throws Exception {
+        final File output = createTempFile("output", ".vcf");
+
+        final String[] args = {
+                "-I", "/Users/davidben/Desktop/munrosa_bams_bugreport/pruned_cycle.bam",
+                "-R", b37Reference,
+                "-L", "1:169510380",
+                "--" + IntervalArgumentCollection.INTERVAL_PADDING_LONG_NAME, "100",
+                "-O", output.getAbsolutePath()
+        };
+        runCommandLine(args);
+
+        final Optional<VariantContext> het = VariantContextTestUtils.streamVcf(output)
+                .filter(vc -> vc.getStart() == 169510380)
+                .findFirst();
+
+        Assert.assertTrue(het.isPresent());
+        Assert.assertTrue(het.get().getGenotype(0).getAD()[1] > 100);
     }
 
     @DataProvider
