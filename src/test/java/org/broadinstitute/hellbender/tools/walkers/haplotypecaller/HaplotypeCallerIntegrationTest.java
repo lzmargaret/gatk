@@ -1022,7 +1022,7 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
         final File output = createTempFile("output", ".vcf");
 
         final String[] args = {
-                "-I", "/Users/davidben/Desktop/munrosa_bams_bugreport/pruned_cycle.bam",
+                "-I", TEST_FILES_DIR + "pruned_cycle.bam",
                 "-R", b37Reference,
                 "-L", "1:169510380",
                 "--" + IntervalArgumentCollection.INTERVAL_PADDING_LONG_NAME, "100",
