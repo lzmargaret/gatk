@@ -141,8 +141,6 @@ workflow Mutect2 {
     String? funcotator_extra_args
 
     Boolean run_funcotator_or_default = select_first([run_funcotator, false])
-    File funco_default_data_sources = "gs://broad-public-datasets/funcotator/funcotator_dataSources.v1.6.20190124s.tar.gz"
-    File? final_funco_data_sources_tar_gz = if defined(funco_data_sources_tar_gz) then funco_data_sources_tar_gz else funco_default_data_sources
     String funco_default_output_format = "MAF"
 
     # runtime
@@ -439,7 +437,7 @@ workflow Mutect2 {
                 compress = if defined(funco_compress) then funco_compress else false,
                 use_gnomad = if defined(funco_use_gnomad_AF) then funco_use_gnomad_AF else false,
 
-                data_sources_tar_gz = final_funco_data_sources_tar_gz,
+                data_sources_tar_gz = funco_data_sources_tar_gz,
 
                 control_id = M2.normal_sample[0],
                 case_id = M2.tumor_sample[0],
@@ -1200,7 +1198,7 @@ task SumFloats {
         docker: "python:2.7"
         disks: "local-disk " + 10 + " HDD"
         preemptible: select_first([preemptible_attempts, 10])
-        maxRetries: FuncotateMafselect_first([max_retries, 3])
+        maxRetries: select_first([max_retries, 3])
     }
 }
 
@@ -1219,7 +1217,9 @@ task Funcotate {
      Boolean compress
      Boolean use_gnomad
 
-     File? data_sources_tar_gz
+     # This should be updated when a new version of the data sources is released
+     # TODO: Make this dynamically chosen in the command.
+     File? data_sources_tar_gz = "gs://broad-public-datasets/funcotator/funcotator_dataSources.v1.6.20190124s.tar.gz"
 
      String? control_id
      String? case_id
@@ -1270,11 +1270,6 @@ task Funcotate {
 
      Boolean use_ssd = false
 
-     # This should be updated when a new version of the data sources is released
-     # TODO: Make this dynamically chosen in the command.
-     # TODO: Make this pull from google cloud, rather than from the FTP:
-     String default_datasources_version = "funcotator_dataSources.v1.6.20190124s"
-
      # You may have to change the following two parameter values depending on the task requirements
      Int default_ram_mb = 3000
      # WARNING: In the workflow, you should calculate the disk space as an input to this task (disk_space_gb).  Please see [TODO: Link from Jose] for examples.
@@ -1290,22 +1285,11 @@ task Funcotate {
          set -e
          export GATK_LOCAL_JAR=${default="/root/gatk.jar" gatk_override}
 
-         # Handle our data sources:
-         DATA_SOURCES_TAR_GZ=${data_sources_tar_gz}
-         if [[ ! -e $DATA_SOURCES_TAR_GZ ]] ; then
-             # We have to download the data sources:
-             echo "Data sources gzip does not exist: $DATA_SOURCES_TAR_GZ"
-             echo "Downloading default data sources..."
-             wget ftp://gsapubftp-anonymous@ftp.broadinstitute.org/bundle/funcotator/${default_datasources_version}.tar.gz
-             tar -zxf ${default_datasources_version}.tar.gz
-             DATA_SOURCES_FOLDER=${default_datasources_version}
-         else
-             # Extract the tar.gz:
-             echo "Extracting data sources zip file..."
-             mkdir datasources_dir
-             tar zxvf ${data_sources_tar_gz} -C datasources_dir --strip-components 1
-             DATA_SOURCES_FOLDER="$PWD/datasources_dir"
-         fi
+         # Extract our data sources:
+         echo "Extracting data sources zip file..."
+         mkdir datasources_dir
+         tar zxvf ${data_sources_tar_gz} -C datasources_dir --strip-components 1
+         DATA_SOURCES_FOLDER="$PWD/datasources_dir"
 
          # Handle gnomAD:
          if ${use_gnomad} ; then
